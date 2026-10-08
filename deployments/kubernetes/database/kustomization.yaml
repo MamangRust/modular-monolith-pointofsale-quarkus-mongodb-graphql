@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+# MongoDB — one standalone instance per bounded context (database-per-context),
+# no proxy. Headless Service, tidak terekspos ke luar cluster.
+- mongo-identity.yaml
+- mongo-merchant.yaml
+- mongo-catalog.yaml
+- mongo-sales.yaml
+- mongo-email.yaml
+- mongo-network-policy.yaml
+# ClickHouse (analytics)
+- clickhouse-pvc.yaml
+- clickhouse-deployment.yaml
+- clickhouse-service.yaml
+- clickhouse-network-policy.yaml
