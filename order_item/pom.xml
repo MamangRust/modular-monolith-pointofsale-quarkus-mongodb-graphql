@@ -26,13 +26,6 @@
             <groupId>com.sanedge</groupId>
             <artifactId>common</artifactId>
         </dependency>
-        <!-- Reusable test fixtures from common (MongoTestBase, MongoDbResource) -->
-        <dependency>
-            <groupId>com.sanedge</groupId>
-            <artifactId>common</artifactId>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
 
         <!-- Order Service dependency -->
         <dependency>

@@ -26,15 +26,14 @@
             <groupId>com.sanedge</groupId>
             <artifactId>common</artifactId>
         </dependency>
-        <!-- Reusable test fixtures from common (MongoTestBase, MongoDbResource) -->
+
+        <!-- Reusable test fixtures from common -->
         <dependency>
             <groupId>com.sanedge</groupId>
             <artifactId>common</artifactId>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
-
-
 
 
         <!-- Quarkus gRPC server -->

@@ -34,6 +34,12 @@ public class Outbox extends ReactivePanacheMongoEntity {
 
     private String lastError;
 
+    private Instant nextAttemptAt;
+
+    private Instant claimedAt;
+
+    private String claimToken;
+
     public void onCreate() {
         this.createdAt = Instant.now();
     }

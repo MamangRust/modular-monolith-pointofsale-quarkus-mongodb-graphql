@@ -116,24 +116,38 @@ public class OutboxPublisher {
                 .chain(() -> processPending(pending.subList(1, pending.size())));
     }
 
+    /**
+     * Claims the row before publishing it. A {@code null} result means another
+     * instance owns it right now, so the row is skipped for this tick instead
+     * of being published twice.
+     */
     private Uni<Void> process(Outbox outbox) {
-        return kafkaService.sendMessage(outbox.getTopic(), outbox.getAggregateId(), new JsonObject(outbox.getPayload()))
-                .chain(() -> outboxRepository.markProcessed(outbox.id))
-                .onItem().invoke(() -> {
-                    publishedCounter.add(1);
-                    log.debug("📤 Outbox published | id={} topic={} key={}",
-                            outbox.id, outbox.getTopic(), outbox.getAggregateId());
-                })
-                .onFailure().recoverWithUni(err -> {
-                    log.warn("⚠️ Outbox publish failed | id={} topic={} error={}",
-                            outbox.id, outbox.getTopic(), err.getMessage());
-                    return outboxRepository.markFailed(outbox.id, err.getMessage(), maxAttempts)
-                            .invoke(() -> {
-                                if (outbox.getAttempts() + 1 >= maxAttempts) {
-                                    failedCounter.add(1);
-                                    log.error("❌ Outbox moved to FAILED (dead letter) | id={} topic={} attempts={}",
-                                            outbox.id, outbox.getTopic(), outbox.getAttempts() + 1);
-                                }
+        return outboxRepository.claim(outbox)
+                .chain(claimed -> {
+                    if (claimed == null) {
+                        return Uni.createFrom().voidItem();
+                    }
+                    return kafkaService.sendMessage(claimed.getTopic(), claimed.getAggregateId(),
+                                    new JsonObject(claimed.getPayload()))
+                            .chain(() -> outboxRepository.markProcessed(claimed))
+                            .onItem().invoke(() -> {
+                                publishedCounter.add(1);
+                                log.debug("📤 Outbox published | id={} topic={} key={}",
+                                        claimed.id, claimed.getTopic(), claimed.getAggregateId());
+                            })
+                            .onFailure().recoverWithUni(err -> {
+                                log.warn("⚠️ Outbox publish failed | id={} topic={} error={}",
+                                        claimed.id, claimed.getTopic(), err.getMessage());
+                                return outboxRepository.markFailed(claimed, err.getMessage(), maxAttempts)
+                                        .invoke(() -> {
+                                            if (claimed.getAttempts() != null
+                                                    && claimed.getAttempts() >= maxAttempts) {
+                                                failedCounter.add(1);
+                                                log.error("❌ Outbox moved to FAILED (dead letter) | id={} "
+                                                        + "topic={} attempts={}",
+                                                        claimed.id, claimed.getTopic(), claimed.getAttempts());
+                                            }
+                                        });
                             });
                 });
     }

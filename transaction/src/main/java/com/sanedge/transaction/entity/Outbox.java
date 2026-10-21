@@ -20,6 +20,10 @@ public class Outbox extends ReactivePanacheMongoEntity {
 
     private String payload;
 
+    private String domain;
+
+    private String eventId;
+
     private OutboxStatus status = OutboxStatus.PENDING;
 
     private Integer attempts = 0;
@@ -29,6 +33,12 @@ public class Outbox extends ReactivePanacheMongoEntity {
     private Instant processedAt;
 
     private String lastError;
+
+    private Instant nextAttemptAt;
+
+    private Instant claimedAt;
+
+    private String claimToken;
 
     public void onCreate() {
         this.createdAt = Instant.now();

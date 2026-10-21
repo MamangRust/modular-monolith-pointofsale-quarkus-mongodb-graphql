@@ -71,6 +71,12 @@ class OrderCommandServiceImplTest {
     private ProductCommandPort productCommandPort;
     @Mock
     private OrderItemCommandPort orderItemCommandPort;
+    @Mock
+    private com.sanedge.common.adapter.order_item.OrderItemQueryPort orderItemQueryPort;
+    @Mock
+    private com.sanedge.order.service.KafkaService kafkaService;
+    @Mock
+    private com.sanedge.order.repository.OutboxRepository outboxRepository;
 
     private OrderCommandServiceImpl service;
 
@@ -78,7 +84,14 @@ class OrderCommandServiceImplTest {
     void setUp() {
         service = new OrderCommandServiceImpl(orderQueryRepo, orderCommandRepo, validator, redisService,
                 tracingMetrics, merchantQueryPort, cashierQueryPort, productQueryPort, productCommandPort,
-                orderItemCommandPort);
+                orderItemCommandPort, orderItemQueryPort, kafkaService, outboxRepository);
+        lenient().when(orderItemQueryPort.findOrderItemByOrder(anyString()))
+                .thenReturn(Uni.createFrom().item(List.of()));
+        lenient().when(kafkaService.sendMessage(anyString(), anyString(), any()))
+                .thenReturn(Uni.createFrom().voidItem());
+        // ReactivePanacheMongoRepository.persist(T) returns Uni<T>.
+        lenient().when(outboxRepository.persist(any(com.sanedge.order.entity.Outbox.class)))
+                .thenAnswer(inv -> Uni.createFrom().item((com.sanedge.order.entity.Outbox) inv.getArgument(0)));
 
         // Lenient stubs for traceAndMeasure
         lenient().doAnswer(invocation -> {

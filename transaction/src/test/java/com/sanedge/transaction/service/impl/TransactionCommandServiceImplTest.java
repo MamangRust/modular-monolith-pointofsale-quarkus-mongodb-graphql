@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -58,13 +59,16 @@ class TransactionCommandServiceImplTest {
     @Mock private com.sanedge.common.adapter.merchant.MerchantQueryPort merchantQueryPort;
     @Mock private com.sanedge.common.adapter.order.OrderQueryPort orderQueryPort;
     @Mock private com.sanedge.common.adapter.order_item.OrderItemQueryPort orderItemQueryPort;
+    @Mock private com.sanedge.transaction.service.KafkaService kafkaService;
 
     private TransactionCommandServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new TransactionCommandServiceImpl(transactionQueryRepo, transactionCommandRepo, outboxRepository, redisService, tracingMetrics,
-                merchantQueryPort, orderQueryPort, orderItemQueryPort);
+                merchantQueryPort, orderQueryPort, orderItemQueryPort, kafkaService);
+        lenient().when(kafkaService.sendMessage(anyString(), anyString(), any()))
+                .thenReturn(Uni.createFrom().voidItem());
         service.notificationEmail = "admin@example.com";
         lenient().when(outboxRepository.persist(any(Outbox.class))).thenReturn(Uni.createFrom().nullItem());
 
@@ -163,9 +167,14 @@ class TransactionCommandServiceImplTest {
             ApiResponse<TransactionResponse> resp = service.create(req).await().indefinitely();
             assertThat(resp.status()).isEqualTo("success");
 
+            // Both the notification email and the stats event are queued in the
+            // outbox, so select the email row this test is about.
             ArgumentCaptor<Outbox> outboxCaptor = ArgumentCaptor.forClass(Outbox.class);
-            verify(outboxRepository).persist(outboxCaptor.capture());
-            Outbox captured = outboxCaptor.getValue();
+            verify(outboxRepository, atLeastOnce()).persist(outboxCaptor.capture());
+            Outbox captured = outboxCaptor.getAllValues().stream()
+                    .filter(o -> "email-service-topic-transaction-create".equals(o.getTopic()))
+                    .findFirst()
+                    .orElseThrow();
             assertThat(captured.getTopic()).isEqualTo("email-service-topic-transaction-create");
             assertThat(captured.getAggregateType()).isEqualTo("TRANSACTION");
             assertThat(captured.getAggregateId()).isEqualTo(TX_ID_1);

@@ -5,7 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -48,6 +50,14 @@ class OutboxPublisherTest {
         publisher.kafkaService = kafkaService;
         publisher.maxAttempts = 3;
         publisher.batchSize = 10;
+        // claim() hands the row back with a fresh claim token and the incremented
+        // attempt counter, mirroring what the conditional Mongo update returns.
+        lenient().when(outboxRepository.claim(any(Outbox.class))).thenAnswer(inv -> {
+            Outbox row = inv.getArgument(0);
+            row.setAttempts((row.getAttempts() != null ? row.getAttempts() : 0) + 1);
+            row.setClaimToken("claim-" + row.id);
+            return Uni.createFrom().item(row);
+        });
     }
 
     private Outbox pendingOutbox(String hexId, String topic) {
@@ -82,12 +92,12 @@ class OutboxPublisherTest {
             when(outboxRepository.findPending(10)).thenReturn(Uni.createFrom().item(List.of(row)));
             when(kafkaService.sendMessage(eq(row.getTopic()), eq(OUTBOX_ID_1), any(JsonObject.class)))
                     .thenReturn(Uni.createFrom().voidItem());
-            when(outboxRepository.markProcessed(OBJ_ID_1)).thenReturn(Uni.createFrom().voidItem());
+            when(outboxRepository.markProcessed(any(Outbox.class))).thenReturn(Uni.createFrom().voidItem());
 
             publisher.drainPending().await().indefinitely();
 
             verify(kafkaService).sendMessage(eq(row.getTopic()), eq(OUTBOX_ID_1), any(JsonObject.class));
-            verify(outboxRepository).markProcessed(OBJ_ID_1);
+            verify(outboxRepository).markProcessed(any(Outbox.class));
             verify(outboxRepository, never()).markFailed(any(), any(), anyInt());
         }
 
@@ -98,11 +108,12 @@ class OutboxPublisherTest {
             when(outboxRepository.findPending(10)).thenReturn(Uni.createFrom().item(List.of(row)));
             when(kafkaService.sendMessage(eq(row.getTopic()), eq(OUTBOX_ID_2), any(JsonObject.class)))
                     .thenReturn(Uni.createFrom().failure(new RuntimeException("broker down")));
-            when(outboxRepository.markFailed(OBJ_ID_2, "broker down", 3)).thenReturn(Uni.createFrom().voidItem());
+            when(outboxRepository.markFailed(any(Outbox.class), eq("broker down"), eq(3)))
+                    .thenReturn(Uni.createFrom().voidItem());
 
             publisher.drainPending().await().indefinitely();
 
-            verify(outboxRepository).markFailed(OBJ_ID_2, "broker down", 3);
+            verify(outboxRepository).markFailed(any(Outbox.class), eq("broker down"), eq(3));
             verify(outboxRepository, never()).markProcessed(any());
         }
 
@@ -117,8 +128,7 @@ class OutboxPublisherTest {
 
             publisher.drainPending().await().indefinitely();
 
-            verify(outboxRepository).markProcessed(OBJ_ID_1);
-            verify(outboxRepository).markProcessed(OBJ_ID_2);
+            verify(outboxRepository, times(2)).markProcessed(any(Outbox.class));
         }
     }
 }

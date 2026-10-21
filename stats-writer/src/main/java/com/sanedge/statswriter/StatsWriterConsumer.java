@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Kafka consumer for stats.pos.* topics using Vert.x Kafka client
+ * Kafka consumer for stats.pos.* topics (order, order_item, transaction)
+ * using Vert.x Kafka client
  * (matching the existing project pattern in order/transaction modules).
  * Receives domain events and batches them for efficient ClickHouse insertion.
  * Flushes every 1000 rows or every 5 seconds.
@@ -49,6 +50,7 @@ public class StatsWriterConsumer {
 
     private final ConcurrentLinkedQueue<Map<String, Object>> orderBatch = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Map<String, Object>> transactionBatch = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Map<String, Object>> orderItemBatch = new ConcurrentLinkedQueue<>();
     private final AtomicLong eventsConsumed = new AtomicLong(0);
     private final AtomicLong flushErrors = new AtomicLong(0);
 
@@ -69,7 +71,10 @@ public class StatsWriterConsumer {
         consumer = KafkaConsumer.create(vertx, config);
 
         // Subscribe to topics
-        java.util.Set<String> topics = java.util.Set.of("stats.pos.order.event", "stats.pos.transaction.event");
+        java.util.Set<String> topics = java.util.Set.of(
+                "stats.pos.order.event",
+                "stats.pos.order_item.event",
+                "stats.pos.transaction.event");
         consumer.subscribe(topics)
                 .onSuccess(v -> log.info("✅ Subscribed to topics: {}", topics))
                 .onFailure(e -> log.error("❌ Failed to subscribe: {}", e.getMessage(), e));
@@ -125,6 +130,15 @@ public class StatsWriterConsumer {
                     flushOrderBatch();
                 }
             }
+        } else if ("stats.pos.order_item.event".equals(topic)) {
+            Map<String, Object> row = extractOrderItemRow(json);
+            if (row != null) {
+                orderItemBatch.add(row);
+                eventsConsumed.incrementAndGet();
+                if (orderItemBatch.size() >= BATCH_SIZE) {
+                    flushOrderItemBatch();
+                }
+            }
         } else if ("stats.pos.transaction.event".equals(topic)) {
             Map<String, Object> row = extractTransactionRow(json);
             if (row != null) {
@@ -150,6 +164,20 @@ public class StatsWriterConsumer {
         return row;
     }
 
+    private Map<String, Object> extractOrderItemRow(io.vertx.core.json.JsonObject json) {
+        Map<String, Object> row = new HashMap<>();
+        row.put("event_id", json.getString("event_id"));
+        row.put("occurred_at", ClickHouseClient.normalizeDateTime(json.getString("occurred_at")));
+        row.put("order_item_id", json.getString("order_item_id"));
+        row.put("order_id", json.getString("order_id"));
+        row.put("product_id", json.getString("product_id"));
+        row.put("quantity", json.getLong("quantity", 0L));
+        row.put("unit_price", json.getLong("unit_price", 0L));
+        row.put("subtotal", json.getLong("subtotal", 0L));
+        row.put("event_version", System.currentTimeMillis());
+        return row;
+    }
+
     private Map<String, Object> extractTransactionRow(io.vertx.core.json.JsonObject json) {
         Map<String, Object> row = new HashMap<>();
         row.put("event_id", json.getString("event_id"));
@@ -167,6 +195,7 @@ public class StatsWriterConsumer {
 
     private void flushAll() {
         flushOrderBatch();
+        flushOrderItemBatch();
         flushTransactionBatch();
     }
 
@@ -183,6 +212,24 @@ public class StatsWriterConsumer {
                         log.error("❌ Failed to flush order batch: {}", ex.getMessage(), ex);
                         flushErrors.incrementAndGet();
                         batch.forEach(orderBatch::add);
+                        return null;
+                    });
+        }
+    }
+
+    private void flushOrderItemBatch() {
+        List<Map<String, Object>> batch = new ArrayList<>();
+        while (!orderItemBatch.isEmpty() && batch.size() < BATCH_SIZE) {
+            Map<String, Object> row = orderItemBatch.poll();
+            if (row != null) batch.add(row);
+        }
+        if (!batch.isEmpty()) {
+            clickHouseClient.insert("pos.order_item_daily", batch)
+                    .thenRun(() -> log.debug("✅ Flushed {} order_item rows to ClickHouse", batch.size()))
+                    .exceptionally(ex -> {
+                        log.error("❌ Failed to flush order_item batch: {}", ex.getMessage(), ex);
+                        flushErrors.incrementAndGet();
+                        batch.forEach(orderItemBatch::add);
                         return null;
                     });
         }
@@ -210,4 +257,5 @@ public class StatsWriterConsumer {
     public long getFlushErrors() { return flushErrors.get(); }
     public int getOrderBatchSize() { return orderBatch.size(); }
     public int getTransactionBatchSize() { return transactionBatch.size(); }
+    public int getOrderItemBatchSize() { return orderItemBatch.size(); }
 }
